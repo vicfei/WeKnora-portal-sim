@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>{{.Title}} · 门户替身</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f0fdf4;color:#24292f;display:flex;min-height:100vh;align-items:center;justify-content:center}
+.card{background:#fff;border:1px solid #bbf7d0;border-radius:12px;padding:28px;width:360px}
+h2{margin:0 0 4px}.muted{color:#64748b;font-size:12px}.route{background:#f0fdf4;border:1px dashed #86efac;border-radius:8px;padding:6px 10px;font-size:12px;color:#166534;margin:12px 0}
+label{display:flex;flex-direction:column;gap:4px;margin:10px 0;font-size:13px;color:#475569}
+input{border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px}
+button{width:100%;background:#16a34a;color:#fff;border:none;border-radius:8px;padding:10px;cursor:pointer;font-size:14px;margin-top:8px}
+.alert{background:#fee2e2;color:#b91c1c;padding:8px 12px;border-radius:8px;margin-bottom:10px;font-size:13px}
+a{color:#16a34a}
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>统一认证（SSO 模拟）</h2>
+  <div class="muted">v2 路线 · 门户替身 —— 登录后换票跳转 WeKnora 前端</div>
+  <div class="route">本服务零权限逻辑：登录 → WeKnora bridge（个人空间+授权全在平台侧落地）→ 302 前端 <code>#bridge_result</code></div>
+  {{if .Error}}<div class="alert">{{.Error}}</div>{{end}}
+  <form method="post" action="/sso/authorize">
+    <label>员工工号<input name="uum_user_id" autofocus placeholder="REVIEW-U0001"></label>
+    <label>密码<input name="password" type="password" placeholder="review123456"></label>
+    <button type="submit">单点登录并进入知识库</button>
+  </form>
+  <p class="muted" style="margin-top:14px">管理台（管理员）：<a href="/admin">v2 空间授权管理</a></p>
+</div>
+</body>
+</html>
