@@ -220,7 +220,7 @@ func (s *server) render(w http.ResponseWriter, name string, data map[string]any)
 
 func (s *server) loginPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "login", map[string]any{
-		"Title": "统一认证（v2 门户）", "Error": r.URL.Query().Get("error"),
+		"Title": "登录", "Error": r.URL.Query().Get("error"),
 	})
 }
 
