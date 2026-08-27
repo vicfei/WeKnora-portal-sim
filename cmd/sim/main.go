@@ -34,7 +34,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -45,12 +44,13 @@ import (
 var templateFS embed.FS
 
 type config struct {
-	Addr        string
-	WeKnoraBase string
-	FrontendURL string
-	PlatformKey string
-	DBDSN       string
-	TenantHint  string
+	Addr         string
+	WeKnoraBase  string
+	FrontendURL  string
+	PlatformKey  string
+	DBDSN        string
+	TenantHint   string
+	SessionFile  string
 }
 
 func loadConfig(envFile string) config {
@@ -84,52 +84,16 @@ func loadConfig(envFile string) config {
 		PlatformKey: get("WEKNORA_PLATFORM_KEY", ""),
 		DBDSN:       get("PORTAL_DB_DSN", ""),
 		TenantHint:  get("WEKNORA_TENANT_HINT", "1"),
+		SessionFile: get("SIM_SESSION_FILE", ""),
 	}
 }
 
 // ── session store (cookie id → bridge-issued JWT) ──────────────────────
 //
 // Session plumbing only — the JWT itself is WeKnora's judgment of who this
-// is and what they may do. Expiry tracks the bridge token's 24h lifetime.
-
-type portalSession struct {
-	Token       string
-	UUMUserID   string
-	DisplayName string
-	Expires     time.Time
-}
-
-type sessionStore struct {
-	mu       sync.Mutex
-	sessions map[string]*portalSession
-}
-
-func newSessionStore() *sessionStore {
-	return &sessionStore{sessions: map[string]*portalSession{}}
-}
-
-func (s *sessionStore) put(id string, sess *portalSession) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sessions[id] = sess
-	for k, v := range s.sessions { // opportunistic sweep
-		if v.Expires.Before(time.Now()) {
-			delete(s.sessions, k)
-		}
-	}
-}
-
-func (s *sessionStore) get(id string) *portalSession {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if sess, ok := s.sessions[id]; ok {
-		if sess.Expires.After(time.Now()) {
-			return sess
-		}
-		delete(s.sessions, id)
-	}
-	return nil
-}
+// is and what they may do. Sessions persist to disk and outlive the 24h
+// bridge token: resolve() transparently re-bridges near expiry (see
+// session.go), so restarts and token rollover are invisible to the user.
 
 const sessionCookie = "sim_portal_session"
 
@@ -160,23 +124,25 @@ func main() {
 	target, _ := url.Parse(cfg.WeKnoraBase)
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	baseDirector := proxy.Director
-	sessions := newSessionStore()
+	sessions := newSessionStore(cfg.SessionFile)
+	var s *server // captured by the Director closure below; assigned right after
 	proxy.Director = func(r *http.Request) {
 		baseDirector(r)
 		// Session plumbing (not permission logic): attach the bridge-issued
 		// JWT when the caller didn't bring its own Authorization (the admin
-		// page logs in separately and does).
+		// page logs in separately and does). resolve() re-bridges near-expiry
+		// tokens transparently.
 		if r.Header.Get("Authorization") == "" {
 			if c, err := r.Cookie(sessionCookie); err == nil {
-				if sess := sessions.get(c.Value); sess != nil {
-					r.Header.Set("Authorization", "Bearer "+sess.Token)
+				if sess := sessions.resolve(r.Context(), c.Value, s.bridge); sess != nil {
+					r.Header.Set("Authorization", "Bearer "+sess.token())
 				}
 			}
 		}
 	}
 	proxy.FlushInterval = -1 // SSE: flush every chunk immediately
 
-	s := &server{
+	s = &server{
 		cfg: cfg, db: db, sessions: sessions, proxy: proxy,
 		tpl: template.Must(template.ParseFS(templateFS, "templates/*.html")),
 	}
@@ -209,9 +175,8 @@ func main() {
 
 func (s *server) requireSession(next func(http.ResponseWriter, *http.Request, *portalSession)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(sessionCookie)
-		if err == nil {
-			if sess := s.sessions.get(c.Value); sess != nil {
+		if c, err := r.Cookie(sessionCookie); err == nil {
+			if sess := s.sessions.resolve(r.Context(), c.Value, s.bridge); sess != nil {
 				next(w, r, sess)
 				return
 			}
@@ -220,24 +185,25 @@ func (s *server) requireSession(next func(http.ResponseWriter, *http.Request, *p
 	}
 }
 
-func (s *server) startSession(w http.ResponseWriter, uum, token string) {
+func (s *server) startSession(w http.ResponseWriter, uum, token, refresh string) {
 	var name string
 	_ = s.db.QueryRowContext(context.Background(),
 		`SELECT display_name FROM employees WHERE uum_user_id = $1`, uum).Scan(&name)
 	id := fmt.Sprintf("s%d", time.Now().UnixNano())
 	s.sessions.put(id, &portalSession{
-		Token: token, UUMUserID: uum, DisplayName: name,
-		Expires: time.Now().Add(23 * time.Hour),
+		Token: token, RefreshToken: refresh, UUMUserID: uum, DisplayName: name,
+		TokenExp: tokenExpiry(token, time.Now().Add(24*time.Hour)),
+		Expires:  time.Now().Add(sessionAbsTTL),
 	})
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: id, Path: "/", HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, MaxAge: int((23 * time.Hour).Seconds()),
+		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionAbsTTL.Seconds()),
 	})
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
-		s.sessions.put(c.Value, &portalSession{Token: "", Expires: time.Now().Add(-time.Second)})
+		s.sessions.drop(c.Value)
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
 	http.Redirect(w, r, "/", http.StatusFound)
@@ -284,12 +250,12 @@ func (s *server) ssoAuthorize(w http.ResponseWriter, r *http.Request) {
 		deny("账号已禁用")
 		return
 	}
-	token, _, err := s.bridge(r.Context(), uum)
+	token, refresh, err := s.bridge(r.Context(), uum)
 	if err != nil {
 		deny("WeKnora 换票失败：" + err.Error())
 		return
 	}
-	s.startSession(w, uum, token)
+	s.startSession(w, uum, token, refresh)
 	http.Redirect(w, r, "/kb", http.StatusFound)
 }
 
