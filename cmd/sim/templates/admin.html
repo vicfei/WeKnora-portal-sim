@@ -65,7 +65,7 @@ async function api(m,u,b){
 }
 async function login(){
   try{
-    const j=await (await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('email').value,password:$('pwd').value})})).json();
+    const j=await (await fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('email').value,password:$('pwd').value})})).json();
     TOKEN=j.token;$('loginState').textContent='已登录';loadAll();
   }catch(e){msg('登录失败')}
 }
