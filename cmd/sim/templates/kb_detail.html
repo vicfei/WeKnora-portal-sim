@@ -1,72 +1,322 @@
 {{template "begin" .}}{{template "topnav" .}}
-<main class="container">
-<div class="row" style="justify-content:space-between">
-  <h2 id="kbname" style="margin:4px 0">加载中…</h2>
-  <a href="/kb" class="muted">← 返回列表</a>
-</div>
-<div id="kbmeta" class="muted"></div>
-<div class="card">
-  <div class="row">
-    <input id="q" placeholder="检索本知识库…" style="flex:1">
-    <button class="primary" onclick="doSearch()">检索</button>
-    <span id="upwrap" hidden>
-      <input type="file" id="upfile" accept=".pdf,.docx,.txt,.md">
-      <button type="button" onclick="doUpload()">上传文档</button>
-      <span id="upmsg" class="muted"></span>
-    </span>
+<style>
+.kbd-shell{height:calc(100vh - 57px);overflow-y:auto;position:relative;z-index:1}
+.kbd-content{max-width:1080px;margin:0 auto;padding:18px 28px 40px}
+.kbd-head{display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap}
+.kbd-back{
+  width:34px;height:34px;display:grid;place-items:center;border-radius:9px;color:var(--ink-3);
+  background:var(--bg-elevated);border:1px solid var(--line);transition:all .15s;flex-shrink:0;
+}
+.kbd-back:hover{color:var(--gold);border-color:rgba(37,99,235,.35);background:rgba(37,99,235,.04)}
+.kbd-title-wrap{min-width:0;flex:1}
+.kbd-title{font-family:var(--serif);font-size:18px;font-weight:700;color:var(--ink);letter-spacing:.3px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.role-tag{font-size:10px;font-weight:600;padding:2px 8px;border-radius:9px;letter-spacing:.3px;border:1px solid}
+.role-tag.owner{color:#B45309;background:rgba(217,119,6,.10);border-color:rgba(217,119,6,.28)}
+.role-tag.admin{color:#B91C1C;background:rgba(220,38,38,.10);border-color:rgba(220,38,38,.25)}
+.role-tag.contributor{color:#2563EB;background:rgba(37,99,235,.10);border-color:rgba(37,99,235,.25)}
+.role-tag.viewer{color:var(--ink-3);background:var(--bg-sunken);border-color:var(--line)}
+.kbd-meta{font-size:12px;color:var(--muted);margin-top:3px}
+
+.kbd-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.kb-search{
+  display:flex;align-items:center;gap:8px;flex:1;min-width:220px;max-width:420px;padding:9px 14px;
+  background:var(--bg-elevated);border:1px solid var(--line);border-radius:10px;transition:all .2s var(--ease-out);
+}
+.kb-search:focus-within{border-color:rgba(37,99,235,.45);box-shadow:0 0 0 4px rgba(37,99,235,.08),0 2px 8px rgba(37,99,235,.08)}
+.kb-search svg{color:var(--muted);flex-shrink:0}
+.kb-search input{flex:1;font-size:13px;color:var(--ink);background:transparent;border:none!important;padding:0!important}
+.kb-search input::placeholder{color:var(--muted-2)}
+
+/* 检索结果 */
+.results-card{background:var(--bg-elevated);border:1px solid var(--line);border-radius:var(--r-2xl);
+  box-shadow:var(--shadow-card);padding:6px 18px;margin-bottom:16px;animation:fadeUp .4s var(--ease-out)}
+.search-hit{padding:12px 0;border-bottom:1px solid var(--line-soft)}
+.search-hit:last-child{border-bottom:none}
+.search-hit .hit-title{font-size:13px;font-weight:600;color:var(--ink);display:flex;align-items:center;gap:8px}
+.search-hit .hit-title b{color:#B45309}
+.search-hit .hit-content{font-size:12px;color:var(--ink-3);margin-top:4px;line-height:1.65}
+.search-hit .hit-content b{color:#B45309;font-weight:600}
+.search-hit .hit-score{font-family:var(--mono);font-size:10.5px;color:var(--muted-2);margin-top:3px}
+
+/* 文档表格（原型 kb-docs-card） */
+.docs-card{background:var(--bg-elevated);border:1px solid var(--line);border-radius:var(--r-2xl);overflow:hidden;box-shadow:var(--shadow-card)}
+.docs-thead,.docs-row{
+  display:grid;grid-template-columns:minmax(0,1fr) 92px 110px 80px 130px 74px;
+  align-items:center;gap:12px;padding:11px 18px;
+}
+.docs-thead{background:linear-gradient(180deg,var(--bg-sunken) 0%,rgba(235,240,247,.4) 100%);border-bottom:1px solid var(--line)}
+.docs-th{font-size:10.5px;font-weight:700;color:var(--muted-2);letter-spacing:1.2px;text-transform:uppercase}
+.docs-row{border-bottom:1px solid var(--line-soft);transition:background .15s;position:relative}
+.docs-row:last-child{border-bottom:none}
+.docs-row:hover{background:linear-gradient(90deg,rgba(37,99,235,.04) 0%,transparent 100%)}
+.docs-row::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:transparent;transition:background .2s}
+.docs-row:hover::before{background:linear-gradient(180deg,var(--cyan),var(--gold))}
+.docs-td{font-size:12.5px;color:var(--ink-3);min-width:0}
+.col-name{display:flex;align-items:center;gap:11px;min-width:0}
+.doc-ic{
+  flex-shrink:0;font-family:var(--mono);font-size:9px;font-weight:700;width:30px;height:34px;
+  display:grid;place-items:center;border-radius:5px;letter-spacing:.5px;position:relative;
+  box-shadow:0 1px 3px rgba(15,23,42,.08),inset 0 -1px 0 rgba(15,23,42,.08);text-transform:uppercase;
+}
+.doc-ic::before{content:"";position:absolute;top:0;right:0;width:8px;height:8px;background:rgba(255,255,255,.5);clip-path:polygon(0 0,100% 100%,100% 0)}
+.doc-ic.pdf{background:#FEF3C7;color:#B45309}.doc-ic.doc{background:#DBEAFE;color:#1D4ED8}
+.doc-ic.docx{background:#DBEAFE;color:#1D4ED8}.doc-ic.xls{background:#D1FAE5;color:#047857}
+.doc-ic.xlsx{background:#D1FAE5;color:#047857}.doc-ic.csv{background:#D1FAE5;color:#047857}
+.doc-ic.ppt{background:#FEE2E2;color:#B91C1C}.doc-ic.pptx{background:#FEE2E2;color:#B91C1C}
+.doc-ic.md{background:#EDE9FE;color:#6D28D9}.doc-ic.txt{background:#F1F5F9;color:#475569}
+.doc-ic.img{background:#ECFEFF;color:#0E7490}.doc-ic.audio{background:#FEF3C7;color:#92400E}
+.doc-ic.url{background:#E0E7FF;color:#4338CA}.doc-ic.manual{background:#F1F5F9;color:#475569}
+.doc-name{font-size:12.5px;font-weight:500;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.15px}
+.docs-row:hover .doc-name{color:var(--gold)}
+.doc-meta{font-family:var(--mono);font-size:10px;color:var(--muted-2);margin-top:2px;letter-spacing:.2px}
+.doc-time{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.1px}
+.doc-act{
+  width:28px;height:28px;display:grid;place-items:center;border-radius:6px;color:var(--muted-2);
+  transition:all .15s;display:inline-grid;vertical-align:middle;
+}
+.doc-act:hover{background:var(--bg-sunken);color:var(--gold)}
+.doc-acts{display:flex;gap:2px}
+.pager{display:flex;align-items:center;justify-content:center;gap:12px;padding:14px 0;font-size:12px;color:var(--muted)}
+.pager .pg-info{font-family:var(--mono);font-size:11.5px}
+
+/* 上传 */
+.upbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.up-progress{height:4px;background:var(--bg-sunken);border-radius:2px;overflow:hidden;flex:1;min-width:120px;display:none}
+.up-progress .fill{height:100%;width:0;background:linear-gradient(90deg,var(--cyan),var(--gold),var(--violet));transition:width .2s;border-radius:2px}
+.upmsg{font-size:12px;color:var(--muted)}
+
+@media (max-width:860px){
+  .docs-thead,.docs-row{grid-template-columns:minmax(0,1fr) 92px 110px;gap:8px}
+  .docs-th:nth-child(4),.docs-td:nth-child(4),.docs-th:nth-child(5),.docs-td:nth-child(5){display:none}
+  .kbd-content{padding:14px 14px 30px}
+}
+</style>
+
+<main class="kbd-shell">
+  <div class="kbd-content">
+
+    <div class="kbd-head">
+      <a class="kbd-back" href="/kb" title="返回知识库列表">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </a>
+      <div class="kbd-title-wrap">
+        <div class="kbd-title"><span id="kbname">加载中…</span><span id="kbrole"></span></div>
+        <div class="kbd-meta" id="kbmeta"></div>
+      </div>
+    </div>
+
+    <div class="kbd-tools">
+      <div class="kb-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="q" placeholder="混合检索本知识库（语义 + 关键词）…" autocomplete="off">
+      </div>
+      <button class="btn btn-primary" onclick="doSearch()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        检索
+      </button>
+      <span id="upwrap" class="upbar" hidden>
+        <input type="file" id="upfile" hidden accept=".pdf,.txt,.docx,.doc,.epub,.html,.htm,.mhtml,.md,.markdown,.png,.jpg,.jpeg,.gif,.csv,.xlsx,.xls,.pptx,.ppt,.json,.mp3,.wav,.m4a,.flac,.ogg">
+        <button class="btn" onclick="document.getElementById('upfile').click()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          上传文档
+        </button>
+        <div class="up-progress" id="upprog"><div class="fill"></div></div>
+        <span class="upmsg" id="upmsg"></span>
+      </span>
+    </div>
+
+    <div id="results"></div>
+
+    <div class="docs-card" id="docscard">
+      <div class="docs-thead">
+        <span class="docs-th">文档名称</span><span class="docs-th">类型</span><span class="docs-th">解析状态</span>
+        <span class="docs-th">大小</span><span class="docs-th">更新时间</span><span class="docs-th">操作</span>
+      </div>
+      <div id="doctable"><div class="docs-row"><span class="docs-td muted">加载中…</span></div></div>
+      <div class="pager" id="pager"></div>
+    </div>
+
   </div>
-</div>
-<div id="results"></div>
-<div class="card">
-  <h3>文档列表</h3>
-  <table><thead><tr><th>标题</th><th>类型</th><th>解析状态</th></tr></thead><tbody id="doctable"><tr><td colspan="3" class="muted">加载中…</td></tr></tbody></table>
-</div>
 </main>
+
 <script>
 const KB_ID = '{{.KbID}}';
-const ROLE_LABEL = {owner:'本人', admin:'空间管理员', contributor:'可编辑', viewer:'只读'};
+const ROLE_LABEL = {owner:'本人', admin:'空间管理员', contributor:'可编辑', viewer:'只读', editor:'可编辑'};
 const EDITABLE = ['owner','admin','contributor'];
-async function jget(u){ const r=await fetch(u); const j=await r.json(); if(!r.ok||j.success===false) throw new Error(j.error?.message||r.status); return j.data; }
+// WeKnora 导入白名单（application/service/knowledge_util.go supportedImportFileExtensions）
+const ALLOWED_EXT = ['pdf','txt','docx','doc','epub','html','htm','mhtml','md','markdown','png','jpg','jpeg','gif','csv','xlsx','xls','pptx','ppt','json','mp3','wav','m4a','flac','ogg'];
+const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+let MY_ROLE = '', PAGE = 1, TOTAL = 0, PAGE_SIZE = 20, REFRESH_TIMER = null;
+
+function stateHtml(kind, title, desc, action=''){
+  const icons = {
+    empty:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+    error:'<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+  };
+  return `<div class="state ${kind==='error'?'error':''}"><div class="state-ic">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icons[kind]||''}</svg>
+  </div><h3>${esc(title)}</h3><p>${esc(desc)}</p>${action}</div>`;
+}
+function humanSize(n){
+  if (!n || n<=0) return '—';
+  const u=['B','KB','MB','GB']; let i=0;
+  while (n>=1024 && i<u.length-1){n/=1024;i++;}
+  return n.toFixed(n>=100||i===0?0:1)+' '+u[i];
+}
+function fmtTime(t){
+  if (!t) return '—';
+  const d=new Date(t); return isNaN(d)?'—':d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+function docIconClass(d){
+  const ft=(d.file_type||d.type||'').toLowerCase();
+  if (['png','jpg','jpeg','gif'].includes(ft)) return 'img';
+  if (['mp3','wav','m4a','flac','ogg'].includes(ft)) return 'audio';
+  if (d.type==='url') return 'url';
+  if (d.type==='manual') return 'manual';
+  return ft || 'txt';
+}
+const STATUS_LABEL = {completed:'已完成', pending:'排队中', processing:'解析中', finalizing:'收尾中', failed:'失败'};
+
+async function jget(u){ const r=await fetch(u); const j=await r.json().catch(()=>({success:false})); if(!r.ok||j.success===false) throw new Error(j.error?.message||('HTTP '+r.status)); return j.data; }
+
+// ── 头部：详情 + portal 列表交叉引用拿 my_role/tenant_name（详情接口不注入这两个字段） ──
 (async () => {
   try {
     const kb = await jget('/api/v1/knowledge-bases/'+KB_ID);
+    let myRole = kb.my_role || '', tenantName = kb.tenant_name || '';
+    try {
+      const items = await jget('/api/v1/knowledge-bases?scope=portal');
+      const mine = (items||[]).find(it=>it.id===KB_ID);
+      if (mine){ myRole = myRole || mine.my_role || ''; tenantName = tenantName || mine.tenant_name || ''; }
+    } catch {}
+    if (!myRole && kb.my_permission) myRole = kb.my_permission; // 组织共享边界（editor/viewer）
+    MY_ROLE = myRole;
     document.getElementById('kbname').textContent = kb.name;
+    document.getElementById('kbrole').innerHTML = myRole?`<span class="role-tag ${esc(myRole)}">${ROLE_LABEL[myRole]||esc(myRole)}</span>`:'';
     document.getElementById('kbmeta').textContent =
-      `${kb.tenant_name||''} · ${kb.knowledge_count??0} 篇文档 · 我的角色：${ROLE_LABEL[kb.my_role]||kb.my_role||'—'}`;
-    // 上传入口仅按 my_role 做展示提示；真正拦截由 WeKnora 侧执行
-    if (EDITABLE.includes(kb.my_role)) document.getElementById('upwrap').hidden = false;
+      `${tenantName||''}${tenantName?' · ':''}${kb.knowledge_count??0} 篇文档 · 我的角色：${ROLE_LABEL[myRole]||myRole||'—'}`;
+    // 上传入口仅按角色做展示提示；真正拦截由 WeKnora 侧执行
+    if (EDITABLE.includes(myRole)) document.getElementById('upwrap').hidden = false;
   } catch (e) {
-    document.getElementById('kbname').textContent = '无法访问该知识库（' + e.message + '）';
+    document.getElementById('kbname').textContent = '无法访问该知识库';
+    document.getElementById('kbmeta').textContent = e.message + '（可能无权限或已失效，权限由平台侧裁决）';
+    document.getElementById('docscard').innerHTML = stateHtml('error','无法加载知识库','可能没有访问权限，或知识库已被删除');
     return;
   }
-  try {
-    const docs = await jget(`/api/v1/knowledge-bases/${KB_ID}/knowledge?page=1&page_size=50`);
-    document.getElementById('doctable').innerHTML = (Array.isArray(docs)?docs:[])
-      .map(d=>`<tr><td>${d.title}</td><td>${d.type||''}</td><td class="${d.parse_status}">${d.parse_status}</td></tr>`).join('')
-      || '<tr><td colspan="3" class="muted">（空）</td></tr>';
-  } catch (e) { document.getElementById('doctable').innerHTML = `<tr><td colspan="3" class="muted">文档列表加载失败：${e.message}</td></tr>`; }
+  loadDocs(1);
 })();
+
+// ── 文档列表（分页 + 解析中自动刷新） ──
+async function loadDocs(page){
+  PAGE = page;
+  const tb = document.getElementById('doctable');
+  if (!tb.closest('.docs-card').querySelector('.state')) tb.innerHTML = '<div class="docs-row"><span class="docs-td muted">加载中…</span></div>';
+  try {
+    const r = await fetch(`/api/v1/knowledge-bases/${KB_ID}/knowledge?page=${page}&page_size=${PAGE_SIZE}`);
+    const j = await r.json().catch(()=>({success:false}));
+    if (!r.ok || j.success === false) throw new Error(j.error?.message || ('HTTP '+r.status));
+    const docs = j.data || [];
+    TOTAL = j.total ?? docs.length;
+    const totalPages = Math.max(1, Math.ceil(TOTAL / PAGE_SIZE));
+    if (!docs.length && page === 1){
+      tb.innerHTML = stateHtml('empty','知识库还是空的','上传第一份文档，或等待空间管理员补充内容');
+    } else {
+      tb.innerHTML = docs.map(d=>{
+        const isFile = d.type === 'file' || d.file_name;
+        const preview = isFile ? `<a class="doc-act" href="/api/v1/knowledge/${esc(d.id)}/preview" target="_blank" title="预览（Viewer+）"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></a>` : '';
+        // 原始文件下载的权限边界高于预览（Contributor+）；仅对可编辑角色展示入口，拦截在平台侧
+        const download = (isFile && EDITABLE.includes(MY_ROLE)) ? `<a class="doc-act" href="/api/v1/knowledge/${esc(d.id)}/download" title="下载原始文件"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></a>` : '';
+        const errTip = d.parse_status==='failed' && d.error_message ? ` title="${esc(d.error_message)}"` : '';
+        return `<div class="docs-row">
+          <span class="docs-td col-name">
+            <span class="doc-ic ${docIconClass(d)}">${esc((d.file_type||d.type||'?').slice(0,4))}</span>
+            <span class="doc-name-block" style="min-width:0">
+              <span class="doc-name" ${isFile?`style="cursor:pointer" onclick="window.open('/api/v1/knowledge/${esc(d.id)}/preview','_blank')"`:''}>${esc(d.title||d.file_name||'—')}</span>
+              <span class="doc-meta">${esc(d.file_name||d.source||'')}</span>
+            </span>
+          </span>
+          <span class="docs-td mono">${esc(d.file_type||d.type||'—')}</span>
+          <span class="docs-td"><span class="tag ${esc(d.parse_status)}"${errTip}>${['pending','processing','finalizing'].includes(d.parse_status)?'<span class="live-dot"></span>':''}${STATUS_LABEL[d.parse_status]||esc(d.parse_status)}</span></span>
+          <span class="docs-td mono">${isFile?humanSize(d.file_size):'—'}</span>
+          <span class="docs-td doc-time">${fmtTime(d.updated_at)}</span>
+          <span class="docs-td doc-acts">${preview}${download}</span>
+        </div>`;
+      }).join('');
+    }
+    document.getElementById('pager').innerHTML = TOTAL > PAGE_SIZE
+      ? `<button class="btn" ${page<=1?'disabled':''} onclick="loadDocs(${page-1})">‹ 上一页</button>
+         <span class="pg-info">第 ${page} / ${totalPages} 页 · 共 ${TOTAL} 篇</span>
+         <button class="btn" ${page>=totalPages?'disabled':''} onclick="loadDocs(${page+1})">下一页 ›</button>`
+      : (TOTAL?`<span class="pg-info">共 ${TOTAL} 篇</span>`:'');
+    scheduleRefresh(docs);
+  } catch (e) {
+    tb.innerHTML = stateHtml('error','文档列表加载失败', e.message, '<button class="btn" onclick="loadDocs(PAGE)">重试</button>');
+  }
+}
+window.loadDocs = loadDocs;
+
+// 解析未完成时每 4s 静默刷新当前页；全部完成即停
+function scheduleRefresh(docs){
+  clearTimeout(REFRESH_TIMER);
+  const inflight = (docs||[]).some(d=>['pending','processing','finalizing'].includes(d.parse_status));
+  if (inflight){
+    REFRESH_TIMER = setTimeout(()=>{ if (!document.hidden) loadDocs(PAGE); else scheduleRefresh(docs); }, 4000);
+  }
+}
+
+// ── 混合检索 ──
 async function doSearch(){
   const q = document.getElementById('q').value.trim(); if(!q) return;
-  const box = document.getElementById('results'); box.innerHTML = '<div class="card muted">检索中…</div>';
+  const box = document.getElementById('results');
+  box.innerHTML = '<div class="results-card"><div class="state"><h3>检索中…</h3><p>语义 + 关键词混合检索</p></div></div>';
   try {
     const r = await fetch(`/api/v1/knowledge-bases/${KB_ID}/hybrid-search`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({query_text:q, match_count:5})});
     const j = await r.json(); if(!r.ok||j.success===false) throw new Error(j.error?.message||r.status);
     const hits = j.data||[];
-    box.innerHTML = hits.length ? '<div class="card">'+hits.map(h=>`<div class="search-hit"><b>${h.title||''}</b>
-      <div class="muted">${(h.content||'').slice(0,240)}…</div><div>score: ${(h.score??0).toFixed(3)}</div></div>`).join('')+'</div>'
-      : '<div class="card muted">无结果</div>';
-  } catch(e){ box.innerHTML = `<div class="card" style="color:#dc2626">检索失败：${e.message}</div>`; }
+    box.innerHTML = hits.length
+      ? `<div class="results-card">${hits.map(h=>`<div class="search-hit">
+          <div class="hit-title">《${esc(h.title||'')}》</div>
+          <div class="hit-content">${esc((h.content||'').slice(0,300))}…</div>
+          <div class="hit-score">score ${Number(h.score??0).toFixed(3)}${h.knowledge_base_name?' · '+esc(h.knowledge_base_name):''}</div>
+        </div>`).join('')}</div>`
+      : `<div class="results-card">${stateHtml('empty','没有匹配的内容','换个关键词，或确认文档已解析完成')}</div>`;
+  } catch(e){
+    box.innerHTML = `<div class="results-card">${stateHtml('error','检索失败', e.message)}</div>`;
+  }
 }
+window.doSearch = doSearch;
+document.getElementById('q').addEventListener('keydown', e=>{ if(e.key==='Enter') doSearch(); });
+
+// ── 上传（前端类型校验 + XHR 进度） ──
+document.getElementById('upfile').addEventListener('change', doUpload);
 async function doUpload(){
-  const f = document.getElementById('upfile').files[0]; const msg = document.getElementById('upmsg');
-  if(!f){ msg.textContent='请先选择文件'; return; }
-  msg.textContent='上传中…';
+  const input = document.getElementById('upfile');
+  const f = input.files[0]; const msg = document.getElementById('upmsg'); const prog = document.getElementById('upprog');
+  if(!f) return;
+  const ext = f.name.split('.').pop().toLowerCase();
+  if (!ALLOWED_EXT.includes(ext)){
+    msg.textContent = `不支持的文件类型 .${esc(ext)}（支持：${ALLOWED_EXT.length} 类常见文档/表格/图片/音频）`;
+    input.value=''; return;
+  }
+  msg.textContent = ''; prog.style.display='block';
   const fd = new FormData(); fd.append('file', f);
-  const r = await fetch(`/api/v1/knowledge-bases/${KB_ID}/knowledge/file`, {method:'POST', body: fd});
-  const j = await r.json().catch(()=>({}));
-  msg.textContent = (r.ok && j.success!==false) ? '已提交，解析进行中' : '失败：'+(j.error?.message||r.status);
-  if (r.ok && j.success!==false) setTimeout(()=>location.reload(), 1500);
+  await new Promise(resolve=>{
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/v1/knowledge-bases/${KB_ID}/knowledge/file`);
+    xhr.upload.addEventListener('progress', ev=>{
+      if (ev.lengthComputable) prog.firstElementChild.style.width = Math.round(ev.loaded/ev.total*100)+'%';
+    });
+    xhr.addEventListener('loadend', ()=>{
+      let ok = xhr.status>=200 && xhr.status<300, em='HTTP '+xhr.status;
+      try { const j=JSON.parse(xhr.responseText); if (j.success===false) {ok=false; em=j.error?.message||em;} } catch{}
+      if (ok){ msg.textContent='已提交，解析进行中（列表将自动刷新）'; setTimeout(()=>{ prog.style.display='none'; prog.firstElementChild.style.width='0'; loadDocs(1); }, 800); }
+      else { msg.textContent='上传失败：'+em; prog.style.display='none'; }
+      input.value='';
+      resolve();
+    });
+    xhr.send(fd);
+  });
 }
 </script>
 {{template "end" .}}
