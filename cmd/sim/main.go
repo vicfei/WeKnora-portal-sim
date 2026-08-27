@@ -1,9 +1,19 @@
-// Command sim is the v2-route portal stand-in: it plays ONLY the parts of
-// the future Java portal that face WeKnora — SSO login entry, bridge
-// token exchange, and the #bridge_result redirect (decision 022). It
-// deliberately contains ZERO permission logic: every authorization
-// decision happens inside WeKnora (grants engine + per-request RBAC).
-// This is the architectural contrast to the B1 route's WeKnora-portal-proxy.
+// Command sim is the v2-route portal stand-in. It now hosts the SAME three
+// portal pages as the B1 route's WeKnora-portal-proxy (login / knowledge
+// bases / chat), but wired the v2 way: a real WeKnora JWT obtained through
+// the tenantless bridge, every permission decision made by WeKnora
+// (grants engine + per-request RBAC), zero filtering in this service.
+//
+// Architecture ("B1 skin, v2 core"):
+//
+//	browser ──login──▶ sim ──bridge(platform key)──▶ WeKnora JWT
+//	   │                   │ (cookie session, httponly)
+//	   ├── /kb /chat pages ──▶ sim templated UI
+//	   └── /api/v1/* ──▶ transparent reverse proxy (+ Authorization from
+//	                       cookie when the request has none; SSE passthrough)
+//
+// Discipline: NO permission logic may appear here (README 纪律1). Grouping
+// in pages is presentation of server-provided fields (space_type/my_role).
 package main
 
 import (
@@ -24,6 +34,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -34,16 +45,12 @@ import (
 var templateFS embed.FS
 
 type config struct {
-	Addr         string
-	WeKnoraBase  string // http://localhost:8080
-	FrontendURL  string // http://localhost:5173 (redirect target)
-	PlatformKey  string
-	DBDSN        string // read-only access to portal_proxy.employees
-	// TenantHint fills the platform-key gate's mandatory X-Tenant-ID header.
-	// The bridge endpoint ignores it logically (body-driven), but the
-	// middleware rejects values that don't resolve to a REAL tenant
-	// (auth.go attachAPIKeyAuthContext). Any existing tenant id works.
-	TenantHint string
+	Addr        string
+	WeKnoraBase string
+	FrontendURL string
+	PlatformKey string
+	DBDSN       string
+	TenantHint  string
 }
 
 func loadConfig(envFile string) config {
@@ -80,11 +87,58 @@ func loadConfig(envFile string) config {
 	}
 }
 
+// ── session store (cookie id → bridge-issued JWT) ──────────────────────
+//
+// Session plumbing only — the JWT itself is WeKnora's judgment of who this
+// is and what they may do. Expiry tracks the bridge token's 24h lifetime.
+
+type portalSession struct {
+	Token       string
+	UUMUserID   string
+	DisplayName string
+	Expires     time.Time
+}
+
+type sessionStore struct {
+	mu       sync.Mutex
+	sessions map[string]*portalSession
+}
+
+func newSessionStore() *sessionStore {
+	return &sessionStore{sessions: map[string]*portalSession{}}
+}
+
+func (s *sessionStore) put(id string, sess *portalSession) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[id] = sess
+	for k, v := range s.sessions { // opportunistic sweep
+		if v.Expires.Before(time.Now()) {
+			delete(s.sessions, k)
+		}
+	}
+}
+
+func (s *sessionStore) get(id string) *portalSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sess, ok := s.sessions[id]; ok {
+		if sess.Expires.After(time.Now()) {
+			return sess
+		}
+		delete(s.sessions, id)
+	}
+	return nil
+}
+
+const sessionCookie = "sim_portal_session"
+
 type server struct {
-	cfg  config
-	db   *sql.DB
-	tpl  *template.Template
-	proxy http.Handler
+	cfg      config
+	db       *sql.DB
+	tpl      *template.Template
+	sessions *sessionStore
+	proxy    *httputil.ReverseProxy
 }
 
 func main() {
@@ -105,12 +159,26 @@ func main() {
 
 	target, _ := url.Parse(cfg.WeKnoraBase)
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	baseDirector := proxy.Director
+	sessions := newSessionStore()
+	proxy.Director = func(r *http.Request) {
+		baseDirector(r)
+		// Session plumbing (not permission logic): attach the bridge-issued
+		// JWT when the caller didn't bring its own Authorization (the admin
+		// page logs in separately and does).
+		if r.Header.Get("Authorization") == "" {
+			if c, err := r.Cookie(sessionCookie); err == nil {
+				if sess := sessions.get(c.Value); sess != nil {
+					r.Header.Set("Authorization", "Bearer "+sess.Token)
+				}
+			}
+		}
+	}
+	proxy.FlushInterval = -1 // SSE: flush every chunk immediately
 
 	s := &server{
-		cfg:   cfg,
-		db:    db,
-		tpl:   template.Must(template.ParseFS(templateFS, "templates/*.html")),
-		proxy: proxy,
+		cfg: cfg, db: db, sessions: sessions, proxy: proxy,
+		tpl: template.Must(template.ParseFS(templateFS, "templates/*.html")),
 	}
 
 	mux := http.NewServeMux()
@@ -118,24 +186,64 @@ func main() {
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.HandleFunc("GET /{$}", s.loginPage)
-	mux.HandleFunc("POST /sso/authorize", s.ssoAuthorize)
-	mux.HandleFunc("GET /admin", s.adminPage)
-	// transparent passthrough — zero filtering by design (see README 纪律1)
-	mux.Handle("/api/", s.proxy)
-	mux.Handle("/auth/", s.proxy)
 
-	log.Printf("portal-sim listening on %s (weknora=%s frontend=%s) — ZERO permission logic by design",
-		cfg.Addr, cfg.WeKnoraBase, cfg.FrontendURL)
+	// portal pages
+	mux.HandleFunc("GET /{$}", s.loginPage)
+	mux.HandleFunc("POST /sso/authorize", s.ssoAuthorize) // portal session → /kb
+	mux.HandleFunc("GET /sso/native", s.ssoNative)        // bridge → #bridge_result → native frontend
+	mux.HandleFunc("POST /logout", s.logout)
+	mux.HandleFunc("GET /kb", s.requireSession(s.kbPage))
+	mux.HandleFunc("GET /kb/{id}", s.requireSession(s.kbDetailPage))
+	mux.HandleFunc("GET /chat", s.requireSession(s.chatPage))
+	mux.HandleFunc("GET /admin", s.adminPage)
+
+	// transparent passthrough to WeKnora (Authorization injected above)
+	mux.Handle("/api/", s.proxy)
+
+	log.Printf("portal-sim listening on %s (weknora=%s) — B1 skin, v2 core, ZERO permission logic", cfg.Addr, cfg.WeKnoraBase)
 	srv := &http.Server{Addr: cfg.Addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	log.Fatal(srv.ListenAndServe())
 }
 
-func (s *server) loginPage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "login", map[string]any{
-		"Title": "统一认证（v2 门户替身）", "Error": r.URL.Query().Get("error"),
+// ── session helpers ──────────────────────────────────────────────────
+
+func (s *server) requireSession(next func(http.ResponseWriter, *http.Request, *portalSession)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		c, err := r.Cookie(sessionCookie)
+		if err == nil {
+			if sess := s.sessions.get(c.Value); sess != nil {
+				next(w, r, sess)
+				return
+			}
+		}
+		http.Redirect(w, r, "/?error="+url.QueryEscape("请先登录"), http.StatusFound)
+	}
+}
+
+func (s *server) startSession(w http.ResponseWriter, uum, token string) {
+	var name string
+	_ = s.db.QueryRowContext(context.Background(),
+		`SELECT display_name FROM employees WHERE uum_user_id = $1`, uum).Scan(&name)
+	id := fmt.Sprintf("s%d", time.Now().UnixNano())
+	s.sessions.put(id, &portalSession{
+		Token: token, UUMUserID: uum, DisplayName: name,
+		Expires: time.Now().Add(23 * time.Hour),
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: id, Path: "/", HttpOnly: true,
+		SameSite: http.SameSiteLaxMode, MaxAge: int((23 * time.Hour).Seconds()),
 	})
 }
+
+func (s *server) logout(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		s.sessions.put(c.Value, &portalSession{Token: "", Expires: time.Now().Add(-time.Second)})
+	}
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// ── auth pages ───────────────────────────────────────────────────────
 
 func (s *server) render(w http.ResponseWriter, name string, data map[string]any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -144,10 +252,16 @@ func (s *server) render(w http.ResponseWriter, name string, data map[string]any)
 	}
 }
 
-// ssoAuthorize: validate employee credentials (portal_proxy.employees,
-// read-only — the same test accounts the B1 route uses), then exchange the
-// user id for a real WeKnora JWT via the tenantless bridge. WeKnora does
-// the rest: personal-space bootstrap, grant materialization, token minting.
+func (s *server) loginPage(w http.ResponseWriter, r *http.Request) {
+	s.render(w, "login", map[string]any{
+		"Title": "统一认证（v2 门户）", "Error": r.URL.Query().Get("error"),
+	})
+}
+
+// ssoAuthorize validates the employee (same test accounts as B1), exchanges
+// the user id for a real WeKnora JWT via the tenantless bridge, and opens a
+// portal session. WeKnora did everything: personal-space bootstrap, grant
+// materialization, token minting.
 func (s *server) ssoAuthorize(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", 400)
@@ -158,11 +272,9 @@ func (s *server) ssoAuthorize(w http.ResponseWriter, r *http.Request) {
 	deny := func(reason string) {
 		http.Redirect(w, r, "/?error="+url.QueryEscape(reason), http.StatusFound)
 	}
-
 	var hash string
 	var isActive bool
-	if err := s.db.QueryRowContext(
-		r.Context(),
+	if err := s.db.QueryRowContext(r.Context(),
 		`SELECT password_hash, is_active FROM employees WHERE uum_user_id = $1`, uum,
 	).Scan(&hash, &isActive); err != nil || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		deny("工号或密码错误")
@@ -172,20 +284,35 @@ func (s *server) ssoAuthorize(w http.ResponseWriter, r *http.Request) {
 		deny("账号已禁用")
 		return
 	}
-
-	token, refresh, err := s.bridge(r.Context(), uum)
+	token, _, err := s.bridge(r.Context(), uum)
 	if err != nil {
 		deny("WeKnora 换票失败：" + err.Error())
 		return
 	}
+	s.startSession(w, uum, token)
+	http.Redirect(w, r, "/kb", http.StatusFound)
+}
+
+// ssoNative keeps the earlier demo path: bridge + #bridge_result redirect
+// into the native WeKnora frontend (decision 022 contract).
+func (s *server) ssoNative(w http.ResponseWriter, r *http.Request) {
+	uum := strings.TrimSpace(r.URL.Query().Get("uum_user_id"))
+	if uum == "" {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	token, refresh, err := s.bridge(r.Context(), uum)
+	if err != nil {
+		http.Redirect(w, r, "/?error="+url.QueryEscape("换票失败："+err.Error()), http.StatusFound)
+		return
+	}
 	payload, _ := json.Marshal(map[string]string{"token": token, "refresh_token": refresh})
-	// decision 022 / 外部接口.md §19.1: hash fragment, never a query param
 	frag := base64.RawURLEncoding.EncodeToString(payload)
 	http.Redirect(w, r, s.cfg.FrontendURL+"/#bridge_result="+frag, http.StatusFound)
 }
 
-// bridge calls POST /identity/bridge WITHOUT tenant_id: WeKnora resolves
-// the login space (personal bootstrap + active grants) per the v2 contract.
+// bridge calls POST /identity/bridge WITHOUT tenant_id: WeKnora resolves the
+// login space (personal bootstrap + active grants) per the v2 contract.
 func (s *server) bridge(ctx context.Context, uumUserID string) (token, refreshToken string, err error) {
 	body, _ := json.Marshal(map[string]any{"uum_user_id": uumUserID})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -220,8 +347,4 @@ func (s *server) bridge(ctx context.Context, uumUserID string) (token, refreshTo
 		return "", "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
 	}
 	return env.Data.Token, env.Data.RefreshToken, nil
-}
-
-func (s *server) adminPage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "admin", map[string]any{"Title": "v2 管理台（经 portal-sim 反代）"})
 }

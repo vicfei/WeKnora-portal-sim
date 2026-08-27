@@ -1,0 +1,90 @@
+{{template "begin" .}}{{template "topnav" .}}
+<main class="container">
+<div class="chat-wrap">
+  <aside class="card side">
+    <h3>会话</h3>
+    <button class="primary wide" onclick="newSession()">＋ 新会话</button>
+    <ul id="sesslist"></ul>
+  </aside>
+  <section class="card chat-main">
+    <div class="row">
+      <span>引用知识库：</span><span id="kbchips" class="row" style="gap:6px"></span>
+      <span style="flex:1"></span>
+      <span>模型：</span><select id="modelsel"><option value="">加载中…</option></select>
+    </div>
+    <div id="messages" class="messages"><div class="muted centered">新建会话后提问（流式回答，带引用）</div></div>
+    <div class="row">
+      <input id="chatq" placeholder="输入问题，回车发送…" style="flex:1" onkeydown="if(event.key==='Enter')sendChat()">
+      <button class="primary" onclick="sendChat()">发送</button>
+    </div>
+  </section>
+</div>
+</main>
+<script>
+let curSess = null;
+async function jget(u){ const r=await fetch(u); const j=await r.json(); if(!r.ok||j.success===false) throw new Error(j.error?.message||r.status); return j.data; }
+(async () => {
+  // 模型选择器：跨空间聊天必须带调用方租户的 summary 模型（v2 实测语义）
+  try {
+    const models = (await jget('/api/v1/models')).filter(m=>m.type==='KnowledgeQA');
+    document.getElementById('modelsel').innerHTML = models.map(m=>`<option value="${m.id}">${m.display_name||m.name}</option>`).join('') || '<option value="">（当前空间无可用对话模型）</option>';
+  } catch(e){ document.getElementById('modelsel').innerHTML = '<option value="">模型加载失败</option>'; }
+  // KB 选择：来自门户聚合（服务端已按权限裁决）
+  try {
+    const items = await jget('/api/v1/knowledge-bases?scope=portal');
+    document.getElementById('kbchips').innerHTML = items.map(it=>`<label class="chip"><input type="checkbox" class="kbchk" value="${it.id}"> ${it.name}</label>`).join('');
+  } catch(e){ document.getElementById('kbchips').innerHTML = '<span class="muted">知识库加载失败</span>'; }
+  loadSessions();
+})();
+async function loadSessions(){
+  try {
+    const ss = await jget('/api/v1/sessions');
+    document.getElementById('sesslist').innerHTML = (ss||[]).map(s=>`<li><a href="javascript:void(0)" onclick="loadSession('${s.id}')">${s.title||s.id.slice(0,10)+'…'}</a></li>`).join('') || '<li class="muted">（暂无）</li>';
+  } catch(e){ document.getElementById('sesslist').innerHTML = '<li class="muted">会话加载失败</li>'; }
+}
+async function newSession(){
+  try {
+    const s = await fetch('/api/v1/sessions', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}).then(r=>r.json());
+    if (!s.success) throw new Error(s.error?.message);
+    curSess = s.data.id;
+    document.getElementById('messages').innerHTML = '';
+    loadSessions();
+  } catch(e){ alert('建会话失败：'+e.message); }
+}
+function loadSession(id){ curSess = id; document.getElementById('messages').innerHTML = '<div class="muted centered">已切换会话，直接继续提问。</div>'; }
+async function sendChat(){
+  const q = document.getElementById('chatq').value.trim(); if(!q) return;
+  if (!curSess) await newSession();
+  const modelId = document.getElementById('modelsel').value;
+  if (!modelId) { alert('请先选择对话模型（当前空间可能未配置模型）'); return; }
+  const kbIds = Array.from(document.querySelectorAll('.kbchk:checked')).map(c=>c.value);
+  const box = document.getElementById('messages');
+  box.insertAdjacentHTML('beforeend', `<div class="msg user">🧑 ${q}</div><div class="msg bot" id="ans">…</div>`);
+  document.getElementById('chatq').value = '';
+  const ans = document.getElementById('ans');
+  // WeKnora DTO 字段为 query；summary_model_id 取调用方空间模型（跨空间聊天关键参数）
+  const resp = await fetch(`/api/v1/knowledge-chat/${curSess}`, {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({query:q, knowledge_base_ids:kbIds, summary_model_id:modelId})});
+  if (!resp.ok || !resp.body) { ans.textContent = '请求失败 HTTP ' + resp.status; return; }
+  const reader = resp.body.getReader(); const dec = new TextDecoder();
+  let buf='', text='', refs=null;
+  while (true) {
+    const {done, value} = await reader.read(); if (done) break;
+    buf += dec.decode(value, {stream:true});
+    let idx;
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0,idx).trim(); buf = buf.slice(idx+1);
+      if (!line.startsWith('data:')) continue;
+      let ev; try { ev = JSON.parse(line.slice(5)); } catch { continue; }
+      const t = ev.response_type || ev.type;
+      if (t==='answer' && ev.content) { text += ev.content; ans.textContent = text; }
+      else if (t==='thinking' && ev.content) { ans.textContent = '💭 ' + ev.content; }
+      else if (t==='references') { refs = ev.references || ev.data || refs; }
+      else if (t==='error') { ans.textContent += '\n[错误] ' + (ev.content||ev.error||''); }
+    }
+    box.scrollTop = box.scrollHeight;
+  }
+  if (refs && refs.length) ans.insertAdjacentHTML('beforeend', `<div class="ref" style="font-size:12px;color:#64748b;border-top:1px dashed #e2e8f0;margin-top:6px;padding-top:4px">引用：${refs.slice(0,5).map(r=>'《'+(r.title||r.knowledge_title||'')+'》').join(' ')}</div>`);
+}
+</script>
+{{template "end" .}}

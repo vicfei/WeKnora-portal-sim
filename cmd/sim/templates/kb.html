@@ -1,0 +1,46 @@
+{{template "begin" .}}{{template "topnav" .}}
+<main class="container">
+<h2>知识库 <span class="tag-v2">个人 · 团队 · 公司公共 一站可见</span></h2>
+<div id="loading" class="card muted">加载中…</div>
+<div id="empty" class="card muted" hidden>暂无可见的知识库</div>
+<div id="groups"></div>
+</main>
+<script>
+// 分组只是"呈现"服务端字段（space_type/my_role）——本页不做任何权限判断
+const GROUPS = [
+  {key:'personal', label:'个人空间'},
+  {key:'team',     label:'团队空间'},
+  {key:'public',   label:'公司公共'},
+  {key:'shared',   label:'共享给我'},
+];
+const ROLE_LABEL = {owner:'本人', admin:'空间管理员', contributor:'可编辑', viewer:'只读'};
+function classify(it){
+  if (it.shared) return it.space_type === 'all' ? 'public' : 'shared';
+  if (it.space_type === 'personal') return 'personal';
+  if (it.space_type === 'all') return 'public';
+  return 'team';
+}
+async function jget(u){ const r = await fetch(u); const j = await r.json(); if(!r.ok||j.success===false) throw new Error(j.error?.message||r.status); return j.data; }
+(async () => {
+  try {
+    const items = await jget('/api/v1/knowledge-bases?scope=portal');
+    document.getElementById('loading').hidden = true;
+    if (!items.length) { document.getElementById('empty').hidden = false; return; }
+    const buckets = {};
+    items.forEach(it => { const k = classify(it); (buckets[k] = buckets[k] || []).push(it); });
+    document.getElementById('groups').innerHTML = GROUPS
+      .filter(g => buckets[g.key]?.length)
+      .map(g => `<section class="group"><h3>${g.label}<span class="count">${buckets[g.key].length}</span></h3>
+        <div class="grid">` + buckets[g.key].map(it => {
+          const role = it.my_role || it.permission || '';
+          return `<a class="card kb" href="/kb/${it.id}">
+            <div class="kb-name">${it.name}${role?`<span class="role ${role}">${ROLE_LABEL[role]||role}</span>`:''}</div>
+            <div class="kb-desc">${it.tenant_name||''}</div>
+            <div class="kb-meta">${it.knowledge_count??0} 篇文档</div></a>`;
+        }).join('') + '</div></section>').join('');
+  } catch (e) {
+    document.getElementById('loading').textContent = '加载失败：' + e.message + '（可能登录已过期，请重新登录）';
+  }
+})();
+</script>
+{{template "end" .}}
