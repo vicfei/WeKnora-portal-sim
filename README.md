@@ -1,6 +1,6 @@
 # WeKnora-portal-sim（v2 路线 · 门户替身）
 
-**角色定位**：在 v2 路线里扮演"未来 Java 门户"中与 WeKnora 相关的最小职责——SSO 登录入口 + bridge 换票 + 302 回跳前端（决策 022 的 `#bridge_result` 契约）。**自身零权限逻辑**：不做任何过滤/裁决，一切由 WeKnora 完成（与 B1 路线的 WeKnora-portal-proxy 形成架构对照：智能在平台 vs 智能在代理）。
+**角色定位**（2026-08-27 升级为"B1 皮 + v2 芯"）：承载与 B1 路线**同款的门户三页**（登录/知识库/问答），但接线全走 v2——真实 JWT（bridge 换票）、权限裁决全部在 WeKnora（grants 引擎 + 逐请求 RBAC）、`/api/*` 透明反代零过滤。与 WeKnora-portal-proxy 构成同 UI 不同架构的 A/B 对照，另保留 `/sso/native` 进入 WeKnora 原生前端的对照路径。
 
 ```
 浏览器 ──登录──▶ portal-sim(:8082) ──bridge(无tenant_id, platform key)──▶ WeKnora(:8080)
@@ -14,9 +14,11 @@
 | 路径 | 作用 |
 |---|---|
 | `GET /` | SSO 模拟登录页（员工源=portal_proxy.employees 只读，与 B1 同一批测试账号） |
-| `POST /sso/authorize` | 校验工号密码 → POST /identity/bridge（无 tenant_id）→ 302 `{FRONTEND_URL}/#bridge_result=base64url({token,refresh_token})` |
-| `GET /admin` | v2 管理台页面（经本服务反代调 WeKnora /api/v1/admin/*，管理员 JWT） |
-| `/api/*`、`/auth/*` | 透明反向代理到 WeKnora（零过滤——权限全在 WeKnora 侧） |
+| `POST /sso/authorize` | 校验 → 无 tenant_id bridge → 建 cookie 会话（存真实 JWT）→ 302 `/kb` |
+| `GET /kb`、`GET /kb/{id}`、`GET /chat` | **B1 同款门户三页（v2 接线）**：分组列表/详情检索上传/流式问答（含模型选择器） |
+| `GET /sso/native?uum_user_id=` | 对照演示：bridge → `#bridge_result` → WeKnora 原生前端 |
+| `GET /admin` | v2 管理台（反代调 /api/v1/admin/*，管理员 JWT） |
+| `/api/*` | 透明反代（注入会话 Authorization、SSE 即时 Flush；**零过滤**） |
 | `GET /healthz` | 健康检查 |
 
 ## 配置（env，见 .env.example）
