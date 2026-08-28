@@ -362,35 +362,38 @@ window.openPreview = openPreview; window.downloadFile = downloadFile;
 
 async function jget(u){ const r=await fetch(u); const j=await r.json().catch(()=>({success:false})); if(!r.ok||j.success===false) throw new Error(j.error?.message||('HTTP '+r.status)); return j.data; }
 
-// ── 头部：详情 + portal 列表交叉引用拿 my_role/tenant_name（详情接口不注入这两个字段） ──
+// ── 头部：先查 portal 列表拿 membership 视角（X-Tenant-ID 要在首个 KB 请求前就位），
+//    再拉详情；详情失败时回退用列表条目渲染（跨空间团队库必须带头，否则 403） ──
 (async () => {
+  let mine = null;
   try {
-    const kb = await jget('/api/v1/knowledge-bases/'+KB_ID);
-    let myRole = kb.my_role || '', tenantName = kb.tenant_name || '';
-    try {
-      const items = await jget('/api/v1/knowledge-bases?scope=portal');
-      const mine = (items||[]).find(it=>it.id===KB_ID);
-      if (mine){
-        myRole = myRole || mine.my_role || '';
-        tenantName = tenantName || mine.tenant_name || '';
-        // 有 membership 才带 X-Tenant-ID 成员视角；纯组织共享（无 my_role）不带
-        if (mine.my_role) KB_TENANT = mine.tenant_id || 0;
-      }
-    } catch {}
-    if (!myRole && kb.my_permission) myRole = kb.my_permission; // 组织共享边界（editor/viewer）
-    MY_ROLE = myRole;
-    document.getElementById('kbname').textContent = kb.name;
-    document.getElementById('kbrole').innerHTML = myRole?`<span class="role-tag ${esc(myRole)}">${ROLE_LABEL[myRole]||esc(myRole)}</span>`:'';
-    document.getElementById('kbmeta').textContent =
-      `${tenantName||''}${tenantName?' · ':''}${kb.knowledge_count??0} 篇文档 · 我的角色：${ROLE_LABEL[myRole]||myRole||'—'}`;
-    // 上传入口仅按角色做展示提示；真正拦截由 WeKnora 侧执行
-    if (EDITABLE.includes(myRole)) document.getElementById('upwrap').hidden = false;
-  } catch (e) {
+    const items = await jget('/api/v1/knowledge-bases?scope=portal');
+    mine = (items||[]).find(it=>it.id===KB_ID) || null;
+    // 有 membership 才带 X-Tenant-ID 成员视角；纯组织共享（无 my_role）不带
+    if (mine && mine.my_role) KB_TENANT = mine.tenant_id || 0;
+  } catch {}
+  let kb = null;
+  try {
+    const r = await fetch('/api/v1/knowledge-bases/'+KB_ID, {headers: apiHeaders(false)});
+    const j = await r.json().catch(()=>({success:false}));
+    if (r.ok && j.success !== false) kb = j.data;
+  } catch {}
+  if (!kb && mine) kb = mine; // 详情接口不可用时回退（列表数据足够渲染头部）
+  if (!kb){
     document.getElementById('kbname').textContent = '无法访问该知识库';
-    document.getElementById('kbmeta').textContent = e.message + '（可能无权限或已失效，权限由平台侧裁决）';
+    document.getElementById('kbmeta').textContent = '可能没有访问权限或已失效（权限由平台侧裁决）';
     document.getElementById('docscard').innerHTML = stateHtml('error','无法加载知识库','可能没有访问权限，或知识库已被删除');
     return;
   }
+  const myRole = (mine && mine.my_role) || kb.my_role || (kb.my_permission ? kb.my_permission : '');
+  const tenantName = (mine && mine.tenant_name) || kb.tenant_name || '';
+  MY_ROLE = myRole;
+  document.getElementById('kbname').textContent = kb.name;
+  document.getElementById('kbrole').innerHTML = myRole?`<span class="role-tag ${esc(myRole)}">${ROLE_LABEL[myRole]||esc(myRole)}</span>`:'';
+  document.getElementById('kbmeta').textContent =
+    `${tenantName||''}${tenantName?' · ':''}${kb.knowledge_count??0} 篇文档 · 我的角色：${ROLE_LABEL[myRole]||myRole||'—'}`;
+  // 上传入口仅按角色做展示提示；真正拦截由 WeKnora 侧执行
+  if (EDITABLE.includes(myRole)) document.getElementById('upwrap').hidden = false;
   loadTags();
   loadDocs(1);
 })();
