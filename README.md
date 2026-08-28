@@ -18,7 +18,7 @@
 | `GET /` | 登录页（原型双栏设计；员工源=portal_proxy.employees 只读） |
 | `POST /sso/authorize` | 校验 → 无 tenant_id bridge → 建 cookie 会话（存真实 JWT）→ 302 `/kb` |
 | `GET /kb` | 知识库门户：hero 统计（真实聚合）+ 分组 tabs（个人/团队/公司公共/共享给我）+ 搜索 |
-| `GET /kb/{id}` | 知识库详情：混合检索 + 文档表格（分页/解析状态自动刷新/预览/下载）+ 上传（进度/类型校验） |
+| `GET /kb/{id}` | 知识库详情：混合检索 + 文档表格（分页/解析状态自动刷新/预览/下载/标签过滤）+ 上传（进度/类型校验/**上传后自动弹打标签**） |
 | `GET /chat` | 智能问答：会话历史（加载/置顶/删除）+ 模型选择 + KB 多选 popover + SSE 流式 + 引用来源右栏 + 停止生成 |
 | `GET /sso/native?uum_user_id=` | 对照演示：bridge → `#bridge_result` → WeKnora 原生前端 |
 | `GET /admin` | v2 管理台（反代调 /api/v1/admin/*，管理员 JWT；授权行编辑/按空间过滤） |
@@ -46,6 +46,7 @@
 
 ## 已知边界（设计稿 ↔ 后端现状）
 
+- **KB 范围请求的成员视角**：WeKnora 按 token 激活空间解析 KB 权限，跨空间 membership 需 `X-Tenant-ID` 切换才生效（auth.go 原生机制，切换合法性由平台校验 membership）。详情页对**有 my_role（membership）**的 KB 统一带此头；组织共享只读用户不带，走共享解析——两条路径的读/写边界均实测正确
 - 管理台**审计页**：设计稿 §3.1-9 的 `GET /api/v1/admin/audit`（系统级）在 WeKnora 侧未实现；现有 `/tenants/{id}/audit-log` 对系统管理员不可跨租户访问（实测 403）——待后端补端点后接入
 - 授权编辑**无法改回永久**：`PUT /admin/grants/{id}` 的 `valid_until` 为 `*time.Time`，JSON null 视为"未提供"
 - KB 卡片**chunk_count**：portal 列表/详情接口对文档型 KB 不填 chunk_count（仅 FAQ 型），卡片显示 knowledge_count 口径

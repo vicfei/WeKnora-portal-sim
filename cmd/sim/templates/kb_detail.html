@@ -85,6 +85,43 @@
 .up-progress .fill{height:100%;width:0;background:linear-gradient(90deg,var(--cyan),var(--gold),var(--violet));transition:width .2s;border-radius:2px}
 .upmsg{font-size:12px;color:var(--muted)}
 
+/* 标签 */
+.tag-chip{
+  display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;
+  padding:1px 8px;border-radius:9px;letter-spacing:.2px;border:1px solid var(--line);
+  background:var(--bg-sunken);color:var(--ink-3);vertical-align:1px;
+}
+.tag-chip .tdot{width:5px;height:5px;border-radius:50%;background:var(--gold);flex-shrink:0}
+.tag-filter{max-width:170px;padding:7px 10px;font-size:12px;border-radius:9px}
+.doc-act.tag{position:relative}
+.doc-act.tag.on{color:var(--gold)}
+
+/* 打标签 popover（复用问答页 KB popover 模式） */
+.tag-popover{position:fixed;inset:0;z-index:110;display:none}
+.tag-popover.open{display:block}
+.tag-pop-overlay{position:absolute;inset:0;background:transparent}
+.tag-pop-panel{
+  position:absolute;width:300px;background:var(--bg-elevated);border:1px solid var(--line);
+  border-radius:var(--r-2xl);box-shadow:0 18px 44px rgba(15,23,42,.20),0 6px 16px rgba(15,23,42,.10);
+  overflow:hidden;animation:tagPopIn .18s cubic-bezier(.16,1,.3,1);
+}
+@keyframes tagPopIn{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+.tag-pop-head{padding:12px 14px 10px;border-bottom:1px solid var(--line-soft);background:linear-gradient(135deg,rgba(37,99,235,.05),rgba(124,58,237,.04))}
+.tag-pop-title{font-family:var(--serif);font-size:13px;font-weight:700;color:var(--ink);letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tag-pop-sub{font-size:10.5px;color:var(--muted);margin-top:2px}
+.tag-pop-body{padding:6px;display:flex;flex-direction:column;gap:2px;max-height:230px;overflow-y:auto}
+.tag-opt{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:9px;border:1px solid transparent;background:transparent;cursor:pointer;transition:all .15s;text-align:left}
+.tag-opt:hover{background:var(--bg-sunken)}
+.tag-opt-check{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--line-strong);flex-shrink:0;position:relative;transition:all .15s;background:var(--bg-elevated)}
+.tag-opt.active .tag-opt-check{background:linear-gradient(135deg,var(--gold),var(--violet));border-color:transparent;box-shadow:0 2px 6px rgba(37,99,235,.3)}
+.tag-opt.active .tag-opt-check::after{content:"";position:absolute;left:4px;top:1px;width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.tag-opt .tdot2{width:9px;height:9px;border-radius:3px;background:var(--gold);flex-shrink:0}
+.tag-opt-name{flex:1;font-size:12.5px;color:var(--ink);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tag-new-row{display:flex;gap:6px;padding:8px 10px;border-top:1px dashed var(--line-soft)}
+.tag-new-row input{flex:1;border:1px solid var(--line);border-radius:8px;padding:5px 9px;font-size:12px}
+.tag-pop-foot{display:flex;align-items:center;gap:2px;padding:9px 10px 9px 12px;border-top:1px solid var(--line-soft)}
+.tag-foot-spacer{flex:1}
+
 @media (max-width:860px){
   .docs-thead,.docs-row{grid-template-columns:minmax(0,1fr) 92px 110px;gap:8px}
   .docs-th:nth-child(4),.docs-td:nth-child(4),.docs-th:nth-child(5),.docs-td:nth-child(5){display:none}
@@ -123,6 +160,9 @@
         <div class="up-progress" id="upprog"><div class="fill"></div></div>
         <span class="upmsg" id="upmsg"></span>
       </span>
+      <select class="tag-filter" id="tagFilter" onchange="loadDocs(1)" title="按标签过滤文档">
+        <option value="">全部标签</option>
+      </select>
     </div>
 
     <div id="results"></div>
@@ -139,6 +179,27 @@
   </div>
 </main>
 
+<!-- 打标签 popover（编辑角色；新建标签仅 owner/admin，门禁在 WeKnora 侧） -->
+<div class="tag-popover" id="tagPopover">
+  <div class="tag-pop-overlay" onclick="closeTagPopover()"></div>
+  <div class="tag-pop-panel">
+    <div class="tag-pop-head">
+      <div class="tag-pop-title" id="tagPopTitle">给文档打标签</div>
+      <div class="tag-pop-sub">多选，保存后替换该文档的全部标签</div>
+    </div>
+    <div class="tag-pop-body" id="tagPopBody"></div>
+    <div class="tag-new-row" id="tagNewRow" hidden>
+      <input id="tagNewName" placeholder="新标签名称…" maxlength="32" onkeydown="if(event.key==='Enter'){event.preventDefault();createTag();}">
+      <button class="btn" onclick="createTag()" style="padding:5px 10px">创建</button>
+    </div>
+    <div class="tag-pop-foot">
+      <button class="kb-link" onclick="clearTagSel()" style="background:none;border:none;cursor:pointer;font-size:11.5px;color:var(--muted);padding:4px 7px;border-radius:6px">清空</button>
+      <div class="tag-foot-spacer"></div>
+      <button class="kb-done" id="tagSaveBtn" onclick="saveTagPopover()" style="background:linear-gradient(135deg,var(--cyan),var(--gold));color:#fff;font-size:11.5px;font-weight:600;padding:5px 16px;border-radius:8px;border:none;cursor:pointer">保存</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const KB_ID = '{{.KbID}}';
 const ROLE_LABEL = {owner:'本人', admin:'空间管理员', contributor:'可编辑', viewer:'只读', editor:'可编辑'};
@@ -148,6 +209,16 @@ const ALLOWED_EXT = ['pdf','txt','docx','doc','epub','html','htm','mhtml','md','
 const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 let MY_ROLE = '', PAGE = 1, TOTAL = 0, PAGE_SIZE = 20, REFRESH_TIMER = null;
+let TAGS = [], TAG_TARGET = null, DOCS = [], KB_TENANT = 0; // TAG_TARGET = {id, title, sel:Set<tagId>}
+
+// KB 范围请求的统一头部：当 portal 条目带 my_role（= 在该空间有 membership）时，
+// 用 WeKnora 原生 X-Tenant-ID 切到成员视角（切换合法性由平台校验 membership——
+// 这是上下文路由，不是权限判断；组织共享只读用户不带此头，走共享解析）。
+function apiHeaders(json){
+  const h = json ? {'Content-Type':'application/json'} : {};
+  if (KB_TENANT) h['X-Tenant-ID'] = String(KB_TENANT);
+  return h;
+}
 
 function stateHtml(kind, title, desc, action=''){
   const icons = {
@@ -178,6 +249,117 @@ function docIconClass(d){
 }
 const STATUS_LABEL = {completed:'已完成', pending:'排队中', processing:'解析中', finalizing:'收尾中', failed:'失败'};
 
+// ── 标签：加载 + 过滤下拉（Viewer 也可用；接口门禁在平台侧） ──
+const TAG_PALETTE = ['#2563EB','#7C3AED','#059669','#D97706','#DC2626','#0EA5E9','#4F46E5','#0F766E'];
+function tagColor(t, i){ return t && t.color ? t.color : TAG_PALETTE[(i||0) % TAG_PALETTE.length]; }
+async function loadTags(){
+  try {
+    const r = await fetch(`/api/v1/knowledge-bases/${KB_ID}/tags?page=1&page_size=200`, {headers: apiHeaders(false)});
+    const j = await r.json().catch(()=>({success:false}));
+    if (!r.ok || j.success===false) throw new Error(j.error?.message||('HTTP '+r.status));
+    const d = j.data || {};
+    TAGS = d.data || d || [];
+  } catch(e){ TAGS = []; }
+  renderTagFilter();
+}
+function renderTagFilter(){
+  const sel = document.getElementById('tagFilter'), cur = sel.value;
+  sel.innerHTML = '<option value="">全部标签</option>' + TAGS.map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+  if ([...sel.options].some(o=>o.value===cur)) sel.value = cur;
+}
+function renderDocTags(d){
+  const tags = d.tags || [];
+  if (!tags.length) return '';
+  return `<span style="margin-left:6px;white-space:normal">${tags.slice(0,4).map((t,i)=>
+    `<span class="tag-chip" style="border-color:${tagColor(t,i)}44"><span class="tdot" style="background:${tagColor(t,i)}"></span>${esc(t.name)}</span>`).join('')}${tags.length>4?`<span class="muted" style="font-size:10px"> +${tags.length-4}</span>`:''}</span>`;
+}
+
+// ── 打标签 popover（编辑角色入口；真正拦截由 WeKnora 侧执行） ──
+function openTagPopover(doc, anchorEl){
+  if (!EDITABLE.includes(MY_ROLE)) return;
+  TAG_TARGET = {id: doc.id, title: doc.title || doc.file_name || '文档', sel: new Set((doc.tags||[]).map(t=>t.id))};
+  document.getElementById('tagPopTitle').textContent = '《' + TAG_TARGET.title + '》';
+  // 新建标签入口仅对 owner/admin 展示（OwnedKBOrAdmin 门禁；拦截在平台侧）
+  document.getElementById('tagNewRow').hidden = !['owner','admin'].includes(MY_ROLE);
+  renderTagPopBody();
+  const pop = document.getElementById('tagPopover'), panel = pop.querySelector('.tag-pop-panel');
+  pop.classList.add('open');
+  const r = (anchorEl || document.getElementById('upwrap')).getBoundingClientRect();
+  panel.style.left = Math.max(8, Math.min(r.left, window.innerWidth-308))+'px';
+  panel.style.top  = Math.min(r.bottom+8, window.innerHeight-380)+'px';
+}
+function closeTagPopover(){ document.getElementById('tagPopover').classList.remove('open'); TAG_TARGET = null; }
+function renderTagPopBody(){
+  document.getElementById('tagPopBody').innerHTML = TAGS.length ? TAGS.map((t,i)=>`
+    <button class="tag-opt ${TAG_TARGET.sel.has(t.id)?'active':''}" type="button" data-tid="${esc(t.id)}" onclick="toggleTagSel('${esc(t.id)}')">
+      <span class="tag-opt-check"></span>
+      <span class="tdot2" style="background:${tagColor(t,i)}"></span>
+      <span class="tag-opt-name">${esc(t.name)}</span>
+    </button>`).join('')
+    : '<div class="muted" style="text-align:center;padding:14px 0;font-size:12px">此知识库还没有标签</div>';
+}
+function toggleTagSel(tid){
+  if (!TAG_TARGET) return;
+  TAG_TARGET.sel.has(tid) ? TAG_TARGET.sel.delete(tid) : TAG_TARGET.sel.add(tid);
+  renderTagPopBody();
+}
+function clearTagSel(){ if (TAG_TARGET){ TAG_TARGET.sel.clear(); renderTagPopBody(); } }
+async function saveTagPopover(){
+  if (!TAG_TARGET) return;
+  const btn = document.getElementById('tagSaveBtn'); btn.disabled = true;
+  try {
+    const r = await fetch('/api/v1/knowledge/tags', {
+      method:'PUT', headers: apiHeaders(true),
+      body: JSON.stringify({updates:{[TAG_TARGET.id]:[...TAG_TARGET.sel]}, kb_id:KB_ID}),
+    });
+    const j = await r.json().catch(()=>({}));
+    if (!r.ok || j.success===false) throw new Error(j.error?.message || ('HTTP '+r.status));
+    closeTagPopover();
+    loadDocs(PAGE); // 刷新行内 chips
+  } catch(e){
+    alert('保存标签失败：'+e.message+'（权限由平台侧裁决）');
+  } finally { btn.disabled = false; }
+}
+async function createTag(){
+  const input = document.getElementById('tagNewName');
+  const name = input.value.trim(); if (!name) return;
+  try {
+    const r = await fetch(`/api/v1/knowledge-bases/${KB_ID}/tags`, {
+      method:'POST', headers: apiHeaders(true),
+      body: JSON.stringify({name, color: TAG_PALETTE[TAGS.length % TAG_PALETTE.length]}),
+    });
+    const j = await r.json().catch(()=>({}));
+    if (!r.ok || j.success===false) throw new Error(j.error?.message || ('HTTP '+r.status));
+    input.value = '';
+    await loadTags();
+    if (TAG_TARGET && j.data?.id){ TAG_TARGET.sel.add(j.data.id); renderTagPopBody(); }
+  } catch(e){ alert('创建标签失败：'+e.message+'（新建标签需空间 owner/admin，裁决在平台侧）'); }
+}
+document.addEventListener('click', e=>{ if (!e.target.closest('.tag-popover') && !e.target.closest('.doc-act.tag')) closeTagPopover(); });
+document.addEventListener('keydown', e=>{ if (e.key==='Escape') closeTagPopover(); });
+document.querySelector('#tagPopover .tag-pop-panel').addEventListener('click', e=>e.stopPropagation());
+
+// ── 预览 / 下载：经 fetch 携带成员视角头部（裸 <a> 无法带 X-Tenant-ID），权限由平台裁决 ──
+async function openPreview(id){
+  try{
+    const r = await fetch(`/api/v1/knowledge/${id}/preview`, {headers: apiHeaders(false)});
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    const blob = await r.blob();
+    window.open(URL.createObjectURL(blob), '_blank');
+  }catch(e){ alert('预览失败：'+e.message+'（权限由平台侧裁决）'); }
+}
+async function downloadFile(id, name){
+  try{
+    const r = await fetch(`/api/v1/knowledge/${id}/download`, {headers: apiHeaders(false)});
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name || 'document'; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 30000);
+  }catch(e){ alert('下载失败：'+e.message+'（原始文件下载需 Contributor+，权限由平台侧裁决）'); }
+}
+window.openPreview = openPreview; window.downloadFile = downloadFile;
+
 async function jget(u){ const r=await fetch(u); const j=await r.json().catch(()=>({success:false})); if(!r.ok||j.success===false) throw new Error(j.error?.message||('HTTP '+r.status)); return j.data; }
 
 // ── 头部：详情 + portal 列表交叉引用拿 my_role/tenant_name（详情接口不注入这两个字段） ──
@@ -188,7 +370,12 @@ async function jget(u){ const r=await fetch(u); const j=await r.json().catch(()=
     try {
       const items = await jget('/api/v1/knowledge-bases?scope=portal');
       const mine = (items||[]).find(it=>it.id===KB_ID);
-      if (mine){ myRole = myRole || mine.my_role || ''; tenantName = tenantName || mine.tenant_name || ''; }
+      if (mine){
+        myRole = myRole || mine.my_role || '';
+        tenantName = tenantName || mine.tenant_name || '';
+        // 有 membership 才带 X-Tenant-ID 成员视角；纯组织共享（无 my_role）不带
+        if (mine.my_role) KB_TENANT = mine.tenant_id || 0;
+      }
     } catch {}
     if (!myRole && kb.my_permission) myRole = kb.my_permission; // 组织共享边界（editor/viewer）
     MY_ROLE = myRole;
@@ -204,6 +391,7 @@ async function jget(u){ const r=await fetch(u); const j=await r.json().catch(()=
     document.getElementById('docscard').innerHTML = stateHtml('error','无法加载知识库','可能没有访问权限，或知识库已被删除');
     return;
   }
+  loadTags();
   loadDocs(1);
 })();
 
@@ -213,34 +401,39 @@ async function loadDocs(page){
   const tb = document.getElementById('doctable');
   if (!tb.closest('.docs-card').querySelector('.state')) tb.innerHTML = '<div class="docs-row"><span class="docs-td muted">加载中…</span></div>';
   try {
-    const r = await fetch(`/api/v1/knowledge-bases/${KB_ID}/knowledge?page=${page}&page_size=${PAGE_SIZE}`);
+    const tagF = document.getElementById('tagFilter').value;
+    let url = `/api/v1/knowledge-bases/${KB_ID}/knowledge?page=${page}&page_size=${PAGE_SIZE}`;
+    if (tagF) url += `&tag_ids=${encodeURIComponent(tagF)}`;
+    const r = await fetch(url, {headers: apiHeaders(false)});
     const j = await r.json().catch(()=>({success:false}));
     if (!r.ok || j.success === false) throw new Error(j.error?.message || ('HTTP '+r.status));
     const docs = j.data || [];
+    DOCS = docs;
     TOTAL = j.total ?? docs.length;
     const totalPages = Math.max(1, Math.ceil(TOTAL / PAGE_SIZE));
     if (!docs.length && page === 1){
       tb.innerHTML = stateHtml('empty','知识库还是空的','上传第一份文档，或等待空间管理员补充内容');
     } else {
-      tb.innerHTML = docs.map(d=>{
+      tb.innerHTML = docs.map((d,idx)=>{
         const isFile = d.type === 'file' || d.file_name;
-        const preview = isFile ? `<a class="doc-act" href="/api/v1/knowledge/${esc(d.id)}/preview" target="_blank" title="预览（Viewer+）"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></a>` : '';
+        const preview = isFile ? `<button class="doc-act" title="预览（Viewer+）" onclick="openPreview('${esc(d.id)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>` : '';
         // 原始文件下载的权限边界高于预览（Contributor+）；仅对可编辑角色展示入口，拦截在平台侧
-        const download = (isFile && EDITABLE.includes(MY_ROLE)) ? `<a class="doc-act" href="/api/v1/knowledge/${esc(d.id)}/download" title="下载原始文件"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></a>` : '';
+        const download = (isFile && EDITABLE.includes(MY_ROLE)) ? `<button class="doc-act" title="下载原始文件" onclick="downloadFile('${esc(d.id)}','${esc(d.file_name||d.title||'')}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>` : '';
+        const tagBtn = EDITABLE.includes(MY_ROLE) ? `<button class="doc-act tag ${((d.tags||[]).length)?'on':''}" title="打标签" onclick="openTagPopover(DOCS[${idx}],this)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></button>` : '';
         const errTip = d.parse_status==='failed' && d.error_message ? ` title="${esc(d.error_message)}"` : '';
         return `<div class="docs-row">
           <span class="docs-td col-name">
             <span class="doc-ic ${docIconClass(d)}">${esc((d.file_type||d.type||'?').slice(0,4))}</span>
             <span class="doc-name-block" style="min-width:0">
-              <span class="doc-name" ${isFile?`style="cursor:pointer" onclick="window.open('/api/v1/knowledge/${esc(d.id)}/preview','_blank')"`:''}>${esc(d.title||d.file_name||'—')}</span>
-              <span class="doc-meta">${esc(d.file_name||d.source||'')}</span>
+              <span class="doc-name" ${isFile?`style="cursor:pointer" onclick="openPreview('${esc(d.id)}')"`:''}>${esc(d.title||d.file_name||'—')}</span>
+              <span class="doc-meta">${esc(d.file_name||d.source||'')}${renderDocTags(d)}</span>
             </span>
           </span>
           <span class="docs-td mono">${esc(d.file_type||d.type||'—')}</span>
           <span class="docs-td"><span class="tag ${esc(d.parse_status)}"${errTip}>${['pending','processing','finalizing'].includes(d.parse_status)?'<span class="live-dot"></span>':''}${STATUS_LABEL[d.parse_status]||esc(d.parse_status)}</span></span>
           <span class="docs-td mono">${isFile?humanSize(d.file_size):'—'}</span>
           <span class="docs-td doc-time">${fmtTime(d.updated_at)}</span>
-          <span class="docs-td doc-acts">${preview}${download}</span>
+          <span class="docs-td doc-acts">${preview}${download}${tagBtn}</span>
         </div>`;
       }).join('');
     }
@@ -271,7 +464,7 @@ async function doSearch(){
   const box = document.getElementById('results');
   box.innerHTML = '<div class="results-card"><div class="state"><h3>检索中…</h3><p>语义 + 关键词混合检索</p></div></div>';
   try {
-    const r = await fetch(`/api/v1/knowledge-bases/${KB_ID}/hybrid-search`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({query_text:q, match_count:5})});
+    const r = await fetch(`/api/v1/knowledge-bases/${KB_ID}/hybrid-search`, {method:'POST', headers: apiHeaders(true), body: JSON.stringify({query_text:q, match_count:5})});
     const j = await r.json(); if(!r.ok||j.success===false) throw new Error(j.error?.message||r.status);
     const hits = j.data||[];
     box.innerHTML = hits.length
@@ -304,13 +497,21 @@ async function doUpload(){
   await new Promise(resolve=>{
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `/api/v1/knowledge-bases/${KB_ID}/knowledge/file`);
+    if (KB_TENANT) xhr.setRequestHeader('X-Tenant-ID', String(KB_TENANT));
     xhr.upload.addEventListener('progress', ev=>{
       if (ev.lengthComputable) prog.firstElementChild.style.width = Math.round(ev.loaded/ev.total*100)+'%';
     });
     xhr.addEventListener('loadend', ()=>{
-      let ok = xhr.status>=200 && xhr.status<300, em='HTTP '+xhr.status;
-      try { const j=JSON.parse(xhr.responseText); if (j.success===false) {ok=false; em=j.error?.message||em;} } catch{}
-      if (ok){ msg.textContent='已提交，解析进行中（列表将自动刷新）'; setTimeout(()=>{ prog.style.display='none'; prog.firstElementChild.style.width='0'; loadDocs(1); }, 800); }
+      let ok = xhr.status>=200 && xhr.status<300, em='HTTP '+xhr.status, newDoc=null;
+      try { const j=JSON.parse(xhr.responseText); if (j.success===false) {ok=false; em=j.error?.message||em;} newDoc=j.data; } catch{}
+      if (ok){
+        msg.textContent='已提交，解析进行中（可立即打标签）';
+        setTimeout(()=>{ prog.style.display='none'; prog.firstElementChild.style.width='0'; loadDocs(1); }, 600);
+        // 上传完成即引导打标签（用户可跳过；标签是元数据，不必等解析完成）
+        if (newDoc && newDoc.id){
+          openTagPopover({id:newDoc.id, title:newDoc.title||f.name, tags:newDoc.tags||[]}, null);
+        }
+      }
       else { msg.textContent='上传失败：'+em; prog.style.display='none'; }
       input.value='';
       resolve();
