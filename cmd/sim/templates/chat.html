@@ -448,7 +448,7 @@ ta.addEventListener('keydown', e=>{
 // ── 知识库多选（数据来自 portal 聚合，服务端已按权限裁决） ──
 async function loadKbs(){
   try {
-    KBS = await jget('/api/v1/knowledge-bases?scope=portal');
+    KBS = await jget('/api/v1/portal/knowledge-bases');
   } catch(e){ KBS = []; }
   document.getElementById('kbPopBody').innerHTML = KBS.map(it=>`
     <button class="kb-opt" type="button" data-kb="${esc(it.id)}" onclick="toggleKbOpt(this)">

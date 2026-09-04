@@ -367,7 +367,7 @@ async function jget(u){ const r=await fetch(u); const j=await r.json().catch(()=
 (async () => {
   let mine = null;
   try {
-    const items = await jget('/api/v1/knowledge-bases?scope=portal');
+    const items = await jget('/api/v1/portal/knowledge-bases');
     mine = (items||[]).find(it=>it.id===KB_ID) || null;
     // 有 membership 才带 X-Tenant-ID 成员视角；纯组织共享（无 my_role）不带
     if (mine && mine.my_role) KB_TENANT = mine.tenant_id || 0;

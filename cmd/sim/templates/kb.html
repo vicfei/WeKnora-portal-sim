@@ -276,7 +276,7 @@ document.getElementById('q').addEventListener('input', renderList);
 (async () => {
   document.getElementById('state').innerHTML = stateHtml('loading','正在加载知识库…','数据来自 WeKnora portal 聚合接口');
   try {
-    const r = await fetch('/api/v1/knowledge-bases?scope=portal');
+    const r = await fetch('/api/v1/portal/knowledge-bases');
     if (r.status === 401){
       document.getElementById('state').innerHTML = stateHtml('error','登录已过期','会话已失效，请重新登录',
         '<a class="btn btn-primary" href="/">重新登录</a>');
